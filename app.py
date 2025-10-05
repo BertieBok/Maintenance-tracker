@@ -1,62 +1,28 @@
 import streamlit as st
 import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
+import openpyxl
+from openpyxl import load_workbook
 from PIL import Image
 import os
-from datetime import datetime
 
-# -----------------------------
-# Google Sheets Setup
-# -----------------------------
-scope = ["https://www.googleapis.com/auth/spreadsheets",
-         "https://www.googleapis.com/auth/drive"]
+# Load Excel workbook
+excel_path = "Maintenance Tracker.xlsx"
+wb = load_workbook(excel_path)
+sheet_names = wb.sheetnames
 
-creds = Credentials.from_service_account_info(
-    st.secrets["gcp_service_account"], scopes=scope
-)
-client = gspread.authorize(creds)
+# Load logo
+logo_path = "logo.png"
+if os.path.exists(logo_path):
+    logo = Image.open(logo_path)
+    st.sidebar.image(logo, use_column_width=True)
 
-SHEET_NAME = "Maintenance Tracker"   # Google Sheet name
-MAIN_SHEET = "Equipment"             # tab for main equipment data
-HISTORY_SHEET = "Service History"    # tab for service logs
-
-@st.cache_data(show_spinner=False)
-def load_data():
-    # Load main sheet
-    sheet_main = client.open(SHEET_NAME).worksheet(MAIN_SHEET)
-    data_main = sheet_main.get_all_records()
-    df = pd.DataFrame(data_main)
-
-    # Load history sheet
-    try:
-        sheet_history = client.open(SHEET_NAME).worksheet(HISTORY_SHEET)
-        data_history = sheet_history.get_all_records()
-        history = pd.DataFrame(data_history)
-    except:
-        history = pd.DataFrame(columns=["Tag", "Serviced Date", "Interval (days)", "Service Type", "Logged At"])
-
-    return df, history, MAIN_SHEET
-
-def save_data(df, history, main_sheet_name):
-    # Save main sheet
-    sheet_main = client.open(SHEET_NAME).worksheet(MAIN_SHEET)
-    sheet_main.clear()
-    sheet_main.update([df.columns.values.tolist()] + df.values.tolist())
-
-    # Save history sheet
-    sheet_history = client.open(SHEET_NAME).worksheet(HISTORY_SHEET)
-    sheet_history.clear()
-    sheet_history.update([history.columns.values.tolist()] + history.values.tolist())
-
-# -----------------------------
-# User Authentication
-# -----------------------------
+# User credentials
 USER_CREDENTIALS = {
     "admin": {"password": "admin123", "role": "Supervisor"},
     "user": {"password": "user123", "role": "Technician"}
 }
 
+# Login
 def login():
     st.sidebar.title("🔐 Login")
     username = st.sidebar.text_input("Username")
@@ -74,62 +40,74 @@ if "auth" not in st.session_state:
     st.session_state.auth = False
     login()
 
-# -----------------------------
-# Main App
-# -----------------------------
+# Main app
 if st.session_state.auth:
-    st.title("🛠️ Equipment Maintenance Tracker (Google Sheets Edition)")
+    st.title("🛠️ Equipment Maintenance Tracker")
     st.caption(f"Logged in as: {st.session_state.user} ({st.session_state.role})")
-
-    df, history, main_sheet_name = load_data()
 
     tab_home, tab_browse, tab_detail = st.tabs(["🏠 Home", "📂 Browse", "🔍 Details"])
 
-    # Home Tab
     with tab_home:
         st.subheader("Search by Tag")
-        if not df.empty:
-            tags = df.iloc[:, 0].dropna().tolist()
-            selected_tag = st.selectbox("Select Tag", tags)
-            if selected_tag:
-                row = df[df.iloc[:, 0] == selected_tag]
-                st.write("**Equipment Details:**")
-                st.dataframe(row)
+        selected_sheet = st.selectbox("Select Area", sheet_names)
+        sheet = wb[selected_sheet]
+        tags = [cell.value for cell in sheet['A'][1:] if cell.value]
+        selected_tag = st.selectbox("Select Tag", tags)
 
-    # Browse Tab
+        if selected_tag:
+            for row in sheet.iter_rows(min_row=2, values_only=True):
+                if row[0] == selected_tag:
+                    st.write("**Equipment Details:**")
+                    for i, cell in enumerate(row):
+                        st.write(f"{sheet.cell(row=1, column=i+1).value}: {cell}")
+                    break
+
     with tab_browse:
         st.subheader("Browse Equipment")
+        selected_sheet = st.selectbox("Select Area to Browse", sheet_names, key="browse")
+        sheet = wb[selected_sheet]
+        data = [[cell.value for cell in row] for row in sheet.iter_rows(values_only=True)]
+        df = pd.DataFrame(data[1:], columns=data[0])
         st.dataframe(df)
 
-    # Detail Tab
     with tab_detail:
         st.subheader("Equipment Details")
-        if not df.empty:
-            tags = df.iloc[:, 0].dropna().tolist()
-            selected_tag = st.selectbox("Select Tag for Details", tags, key="detail_tag")
-            if selected_tag:
-                row = df[df.iloc[:, 0] == selected_tag]
-                st.write("**Details:**")
-                st.dataframe(row)
+        selected_sheet = st.selectbox("Select Area for Details", sheet_names, key="detail")
+        sheet = wb[selected_sheet]
+        tags = [cell.value for cell in sheet['A'][1:] if cell.value]
+        selected_tag = st.selectbox("Select Tag for Details", tags, key="detail_tag")
 
-                if st.session_state.role == "Supervisor":
-                    st.subheader("✏️ Edit Equipment")
-                    edited_values = {}
-                    for col in df.columns:
-                        edited_values[col] = st.text_input(col, value=row.iloc[0][col])
+        if selected_tag:
+            for row in sheet.iter_rows(min_row=2, values_only=True):
+                if row[0] == selected_tag:
+                    st.write("**Details:**")
+                    for i, cell in enumerate(row):
+                        st.write(f"{sheet.cell(row=1, column=i+1).value}: {cell}")
+                    break
 
-                    if st.button("Save Changes"):
-                        for col in df.columns:
-                            df.loc[df.iloc[:, 0] == selected_tag, col] = edited_values[col]
-                        save_data(df, history, main_sheet_name)
-                        st.success("Changes saved to Google Sheets!")
-                else:
-                    st.info("You are signed in as a Technician and cannot edit records.")
+            if st.session_state.role == "Supervisor":
+                st.subheader("✏️ Edit Equipment")
+                edited_values = []
+                for i, cell in enumerate(row):
+                    new_val = st.text_input(f"{sheet.cell(row=1, column=i+1).value}", value=cell)
+                    edited_values.append(new_val)
 
-    # Logout
-    if st.sidebar.button("Logout"):
-        st.session_state.auth = False
-        st.experimental_rerun()
+                if st.button("Save Changes"):
+                    for i, val in enumerate(edited_values):
+                        sheet.cell(row=row[0]+2, column=i+1).value = val
+                    wb.save(excel_path)
+                    st.success("Changes saved successfully.")
+            else:
+                st.info("You are signed in as a Technician and cannot edit records.")
+
+    # Admin-only logo upload
+    if st.session_state.role == "Supervisor":
+        st.sidebar.subheader("📤 Upload Logo")
+        uploaded_logo = st.sidebar.file_uploader("Upload PNG logo", type=["png"])
+        if uploaded_logo:
+            with open("logo.png", "wb") as f:
+                f.write(uploaded_logo.getbuffer())
+            st.sidebar.success("Logo updated. Please refresh the app.")
 
 else:
     st.warning("Please log in to access the app.")
