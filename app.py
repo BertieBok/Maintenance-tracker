@@ -176,26 +176,4 @@ with st.sidebar:
         if st.button("Sign in"):
             user = USERS.get(username.strip())
             if user and hashlib.sha256((SALT + password).encode()).hexdigest() == user["hash"]:
-                st.session_state.auth = True
-                st.session_state.user = username.strip()
-                st.session_state.role = user["role"]
-                st.success(f"Signed in as {st.session_state.user} ({st.session_state.role})")
-                st.rerun()
-            else:
-                st.error("Invalid credentials")
-    else:
-        st.markdown(f"**{st.session_state.user}**")
-        st.markdown(f"Role: **{st.session_state.role}**")
-        if st.button("Sign out"):
-            st.session_state.auth = False
-            st.session_state.user = None
-            st.session_state.role = None
-            st.session_state.view_mode = "home"
-            st.session_state.view_tag = None
-            st.session_state.editing_tag = None
-            st.rerun()
-
-        # 👇 New Admin Panel button
-        if st.session_state.role == "Supervisor":
-            if st.button("⚙️ Admin Panel"):
-                st.session_state.view_mode = "
+                st
