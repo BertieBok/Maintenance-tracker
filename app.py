@@ -108,6 +108,7 @@ def save_data(df, history, main_sheet_name):
         df.to_excel(writer, index=False, sheet_name=main_sheet_name)
         history.to_excel(writer, index=False, sheet_name=HISTORY_SHEET)
 
+# --- Load data early so sidebar can compute counts/options ---
 df, history_df, main_sheet_name = load_data()
 st.session_state.main_sheet_name = main_sheet_name
 
@@ -164,19 +165,29 @@ with st.sidebar:
     show_responsive_logo(main=False)
     st.markdown("---")
     st.header("User")
+
     if not st.session_state.auth:
         username = st.text_input("Username", key="login_user")
         password = st.text_input("Password", type="password", key="login_pw")
+
         if st.button("Sign in"):
             user = USERS.get(username.strip())
             if user and hashlib.sha256((SALT + password).encode()).hexdigest() == user["hash"]:
                 st.session_state.auth = True
                 st.session_state.user = username.strip()
                 st.session_state.role = user["role"]
+
+                # ✅ Force a default view after login
+                if st.session_state.role == "Supervisor":
+                    st.session_state.view_mode = "main"
+                else:
+                    st.session_state.view_mode = "home"
+
                 st.success(f"Signed in as {st.session_state.user} ({st.session_state.role})")
                 st.rerun()
             else:
                 st.error("Invalid credentials")
+
     else:
         st.markdown(f"**{st.session_state.user}**")
         st.markdown(f"Role: **{st.session_state.role}**")
@@ -192,12 +203,4 @@ with st.sidebar:
     st.markdown("---")
     smart_options = [
         f"All ({total_count})",
-        f"Overdue ({overdue_count})",
-        f"Due Soon ({due_soon_count})",
-        f"Overdue + Due Soon ({overdue_plus_due_count})",
-        f"OK ({ok_count})",
-    ]
-    default_index = 0
-    if "smart_filter_display" in st.session_state and st.session_state.smart_filter_display in smart_options:
-        default_index = smart_options.index(st.session_state.smart_filter_display)
-    st.selectbox("Show items", smart_options, index=default_index, key="smart_filter_display")
+        f"Overdue ({overdue
