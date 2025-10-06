@@ -76,6 +76,12 @@ if "main_sheet_name" not in st.session_state:
     st.session_state.main_sheet_name = None
 if "editing_tag" not in st.session_state:
     st.session_state.editing_tag = None
+if "smart_filter_display" not in st.session_state:
+    st.session_state.smart_filter_display = None
+if "page_number" not in st.session_state:
+    st.session_state.page_number = 0
+if "page_size" not in st.session_state:
+    st.session_state.page_size = 25
 
 # --- Demo credentials (replace in production) ---
 SALT = "change_this_salt_for_prod_!@#"
@@ -177,13 +183,11 @@ with st.sidebar:
                 st.session_state.auth = True
                 st.session_state.user = username.strip()
                 st.session_state.role = user["role"]
-
                 # Force a default view after login
                 if st.session_state.role == "Supervisor":
                     st.session_state.view_mode = "main"
                 else:
                     st.session_state.view_mode = "home"
-
                 st.success(f"Signed in as {st.session_state.user} ({st.session_state.role})")
                 st.rerun()
             else:
@@ -209,11 +213,8 @@ with st.sidebar:
         f"Overdue + Due Soon ({overdue_plus_due_count})",
         f"OK ({ok_count})",
     ]
-    # Determine default index based on prior selection if present
     prior = st.session_state.get("smart_filter_display")
     default_index = smart_options.index(prior) if prior in smart_options else 0
-
-    # Use a widget key and DO NOT reassign to session_state manually
     st.selectbox("Show items", smart_options, index=default_index, key="smart_filter_display")
 
     st.markdown("---")
@@ -237,89 +238,25 @@ if not st.session_state.auth:
     st.write("Please sign in from the sidebar to continue.")
     st.stop()
 
-# --- Main content rendering (simple, non-blank) ---
+# --- Professional Home page (replaces previous main rendering) ---
 show_responsive_logo(main=True)
-st.title("Equipment overview")
+st.markdown("<br>", unsafe_allow_html=True)
+st.header("Equipment Maintenance Dashboard")
 
-# Stats row
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total", total_count)
-c2.metric("Overdue", overdue_count)
-c3.metric("Due soon", due_soon_count)
-c4.metric("OK", ok_count)
+# Top KPI cards
+k1, k2, k3, k4 = st.columns([1.4, 1, 1, 1])
+k1.metric("Total Assets", total_count)
+k2.metric("Overdue", overdue_count)
+k3.metric("Due Soon", due_soon_count)
+k4.metric("OK", ok_count)
 
-# Apply smart filter selection
-selection = st.session_state.get("smart_filter_display") or smart_options[0]
-filtered_df = df.copy()
-if "Overdue + Due Soon" in selection:
-    filtered_df = df[df["Status"].isin(["🔴 Overdue", "🟠 Due Soon"])]
-elif "Overdue" in selection and "Overdue + Due Soon" not in selection:
-    filtered_df = df[df["Status"] == "🔴 Overdue"]
-elif "Due Soon" in selection:
-    filtered_df = df[df["Status"] == "🟠 Due Soon"]
-elif "OK" in selection:
-    filtered_df = df[df["Status"] == "🟢 OK"]
-# else: "All" keeps full df
-
-# Search and view mode controls
 st.markdown("---")
-search = st.text_input("Search by tag, area, or function", "")
-if search.strip():
-    q = search.strip().lower()
-    filtered_df = filtered_df[
-        filtered_df.apply(
-            lambda r: any(
-                str(r.get(col, "")).lower().find(q) >= 0
-                for col in [tag_col, area_col, function_col, category_col]
-                if col is not None
-            ),
-            axis=1,
-        )
-    ]
 
-# Role-based note
-if st.session_state.role == "Technician":
-    st.info("You are in view-only mode.")
-else:
-    st.success("Supervisor mode: you can update records below.")
+# Search and quick filters row
+scol1, scol2, scol3 = st.columns([3, 1.4, 1.2])
 
-# Show table (basic)
-st.dataframe(
-    filtered_df[
-        [col for col in [tag_col, area_col, category_col, function_col, serviced_col, interval_col, "Status"] if col is not None]
-    ],
-    use_container_width=True,
-)
-
-# Optional: simple update form for supervisors (update serviced date)
-if st.session_state.role == "Supervisor":
-    st.markdown("---")
-    st.subheader("Quick update: serviced date")
-    tags = filtered_df[tag_col].dropna().astype(str).unique().tolist() if tag_col else []
-    if tags:
-        upd_tag = st.selectbox("Select tag", tags)
-        upd_date = st.date_input("Serviced date", datetime.today().date())
-        upd_interval = st.number_input("Interval (days)", min_value=1, value=30, step=1)
-        if st.button("Save update"):
-            # Update main df
-            idx = df[df[tag_col].astype(str) == str(upd_tag)].index
-            if len(idx) > 0:
-                df.loc[idx, serviced_col] = pd.to_datetime(upd_date)
-                df.loc[idx, interval_col] = int(upd_interval)
-                # Append to history
-                new_row = {
-                    "Tag": upd_tag,
-                    "Serviced Date": pd.to_datetime(upd_date),
-                    "Interval (days)": int(upd_interval),
-                    "Service Type": "Routine",
-                    "Logged At": pd.Timestamp.utcnow(),
-                }
-                history_df = pd.concat([history_df, pd.DataFrame([new_row])], ignore_index=True)
-                # Persist
-                save_data(df, history_df, st.session_state.main_sheet_name)
-                st.success(f"Updated {upd_tag}")
-                st.rerun()
-            else:
-                st.error("Tag not found in main sheet.")
-    else:
-        st.info("No tags available to update.")
+with scol1:
+    search_term = st.text_input(
+        "Search by Tag, Area, Category or Function",
+        value="",
+        placeholder="Type tag number, area,
