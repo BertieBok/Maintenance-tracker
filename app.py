@@ -1,29 +1,22 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-import hashlib
-from io import BytesIO
-import base64
 import sys
 import os
+import base64
 
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------------
 # Helper to locate data files when running as a PyInstaller one-file bundle
 def resource_path(relative_path: str) -> str:
-    """
-    Get absolute path to resource, works for dev and for PyInstaller onefile.
-    """
     if getattr(sys, "frozen", False):
         base_path = sys._MEIPASS
     else:
         base_path = os.path.abspath(os.path.dirname(__file__))
     return os.path.join(base_path, relative_path)
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------------
 
-# --- Page config ---
 st.set_page_config(page_title="Equipment Maintenance Tracker", layout="wide")
 
-# --- Constants ---
 FILE = resource_path("Processing Tracker.xlsx")
 HISTORY_SHEET = "Service History"
 
@@ -68,12 +61,6 @@ def show_responsive_logo(main=True):
 # --- Session state defaults ---
 if "logo_bytes" not in st.session_state:
     st.session_state.logo_bytes = None
-if "auth" not in st.session_state:
-    st.session_state.auth = False
-if "user" not in st.session_state:
-    st.session_state.user = None
-if "role" not in st.session_state:
-    st.session_state.role = None
 if "view_tag" not in st.session_state:
     st.session_state.view_tag = None
 if "view_mode" not in st.session_state:
@@ -82,19 +69,6 @@ if "main_sheet_name" not in st.session_state:
     st.session_state.main_sheet_name = None
 if "editing_tag" not in st.session_state:
     st.session_state.editing_tag = None
-
-# --- Demo credentials (replace in production) ---
-SALT = "change_this_salt_for_prod_!@#"
-USERS = {
-    "supervisor": {
-        "hash": hashlib.sha256((SALT + "supervisor123").encode()).hexdigest(),
-        "role": "Supervisor"
-    },
-    "technician": {
-        "hash": hashlib.sha256((SALT + "tech123").encode()).hexdigest(),
-        "role": "Technician"
-    }
-}
 
 # --- Data loading helpers ---
 @st.cache_data(show_spinner=False)
@@ -114,7 +88,6 @@ def save_data(df, history, main_sheet_name):
         df.to_excel(writer, index=False, sheet_name=main_sheet_name)
         history.to_excel(writer, index=False, sheet_name=HISTORY_SHEET)
 
-# --- Load data early so sidebar can compute counts/options ---
 df, history_df, main_sheet_name = load_data()
 st.session_state.main_sheet_name = main_sheet_name
 
@@ -169,11 +142,48 @@ overdue_plus_due_count = overdue_count + due_soon_count
 with st.sidebar:
     show_responsive_logo(main=False)
     st.markdown("---")
-    st.header("User")
-    if not st.session_state.auth:
-        username = st.text_input("Username", key="login_user")
-        password = st.text_input("Password", type="password", key="login_pw")
-        if st.button("Sign in"):
-            user = USERS.get(username.strip())
-            if user and hashlib.sha256((SALT + password).encode()).hexdigest() == user["hash"]:
-                st
+    smart_options = [
+        f"All ({total_count})",
+        f"Overdue ({overdue_count})",
+        f"Due Soon ({due_soon_count})",
+        f"Overdue + Due Soon ({overdue_plus_due_count})",
+        f"OK ({ok_count})",
+    ]
+    default_index = 0
+    if "smart_filter_display" in st.session_state and st.session_state.smart_filter_display in smart_options:
+        default_index = smart_options.index(st.session_state.smart_filter_display)
+    st.selectbox("Show items", smart_options, index=default_index, key="smart_filter_display")
+
+    st.markdown("---")
+    st.markdown("### Company Logo")
+    uploaded_logo = st.file_uploader("Upload logo PNG or JPEG", type=["png", "jpg", "jpeg"], key="logo_uploader")
+    if uploaded_logo is not None:
+        st.session_state.logo_bytes = uploaded_logo.read()
+        st.success("Logo uploaded")
+
+def show_header(title="Equipment Maintenance Tracker", subtitle=None):
+    col_logo, col_title = st.columns([1, 4])
+    with col_logo:
+        show_responsive_logo(main=True)
+    with col_title:
+        st.markdown(
+            """
+            <style>
+            .em-title { font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial; font-size:32px; font-weight:700; color:#111827; margin-bottom:4px; }
+            .em-sub { font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial; font-size:14px; color:#6b7280; margin-top:0; }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown(f'<div class="em-title">{title}</div>', unsafe_allow_html=True)
+        if subtitle:
+            st.markdown(f'<div class="em-sub">{subtitle}</div>', unsafe_allow_html=True)
+
+show_header(
+    title="Equipment Maintenance Tracker",
+    subtitle="Maintain uptime with clear history and proactive alerts"
+)
+
+# ... keep the rest of your Home, Main, and Detail views unchanged,
+# but remove any `if st.session_state.role == "Supervisor"` checks
+# so that editing is always available.
