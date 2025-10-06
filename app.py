@@ -238,7 +238,7 @@ if not st.session_state.auth:
     st.write("Please sign in from the sidebar to continue.")
     st.stop()
 
-# --- Professional Home page (replaces previous main rendering) ---
+# --- Professional Home page (complete) ---
 show_responsive_logo(main=True)
 st.markdown("<br>", unsafe_allow_html=True)
 st.header("Equipment Maintenance Dashboard")
@@ -253,10 +253,173 @@ k4.metric("OK", ok_count)
 st.markdown("---")
 
 # Search and quick filters row
-scol1, scol2, scol3 = st.columns([3, 1.4, 1.2])
+scol1, scol2, ecol = st.columns([3, 1.6, 1.2])
 
 with scol1:
     search_term = st.text_input(
         "Search by Tag, Area, Category or Function",
         value="",
-        placeholder="Type tag number, area,
+        placeholder="Type tag number, area, category, or function and press Enter"
+    )
+
+with scol2:
+    smart_options = [
+        f"All ({total_count})",
+        f"Overdue ({overdue_count})",
+        f"Due Soon ({due_soon_count})",
+        f"Overdue + Due Soon ({overdue_plus_due_count})",
+        f"OK ({ok_count})",
+    ]
+    prior = st.session_state.get("smart_filter_display")
+    default_index = smart_options.index(prior) if prior in smart_options else 0
+    st.selectbox("Show items", smart_options, index=default_index, key="smart_filter_display")
+
+with ecol:
+    today = datetime.today().date()
+    dr_start = st.date_input("Serviced since", value=today - timedelta(days=30), key="dr_start")
+    dr_end = st.date_input("Serviced until", value=today, key="dr_end")
+
+st.markdown("---")
+
+# Build filtered_df from smart filter first, then global search, then date-range
+selection = st.session_state.get("smart_filter_display") or smart_options[0]
+filtered_df = df.copy()
+
+if "Overdue + Due Soon" in selection:
+    filtered_df = df[df["Status"].isin(["🔴 Overdue", "🟠 Due Soon"])]
+elif "Overdue" in selection and "Overdue + Due Soon" not in selection:
+    filtered_df = df[df["Status"] == "🔴 Overdue"]
+elif "Due Soon" in selection:
+    filtered_df = df[df["Status"] == "🟠 Due Soon"]
+elif "OK" in selection:
+    filtered_df = df[df["Status"] == "🟢 OK"]
+# else All -> keep all
+
+# Apply global search if provided
+if search_term and search_term.strip():
+    q = search_term.strip().lower()
+    cols_to_search = [tag_col, area_col, category_col, function_col]
+    cols_to_search = [c for c in cols_to_search if c is not None]
+    if cols_to_search:
+        mask = pd.Series(False, index=filtered_df.index)
+        for c in cols_to_search:
+            mask = mask | filtered_df[c].astype(str).str.lower().str.contains(q, na=False)
+        filtered_df = filtered_df[mask]
+
+# Apply serviced date range filter on serviced_col
+try:
+    sens = pd.to_datetime(filtered_df[serviced_col], errors="coerce").dt.date
+    filtered_df = filtered_df[(sens >= dr_start) & (sens <= dr_end)]
+except Exception:
+    pass
+
+# Two-column layout: left -> results table; right -> summary / recent activity
+left, right = st.columns([3, 1.2])
+
+with right:
+    st.subheader("Summary")
+    st.write(f"Showing: **{len(filtered_df)}** items")
+    st.markdown("")
+    st.subheader("Recent services")
+    recent = df.dropna(subset=[serviced_col]).sort_values(by=serviced_col, ascending=False).head(6)
+    if not recent.empty:
+        st.table(
+            recent[[tag_col, area_col, serviced_col]].rename(
+                columns={tag_col: "Tag", area_col: "Area", serviced_col: "Serviced"}
+            )
+        )
+    else:
+        st.write("No recent services found")
+
+with left:
+    st.subheader("Search results")
+    display_cols = [tag_col, area_col, category_col, function_col, serviced_col, interval_col, "Status"]
+    display_cols = [c for c in display_cols if c is not None]
+    page_size = st.selectbox("Rows per page", [10, 25, 50, 100], index=[10,25,50,100].index(st.session_state.get("page_size",25)))
+    st.session_state.page_size = page_size
+    if "page_number" not in st.session_state:
+        st.session_state.page_number = 0
+    start = st.session_state.page_number * page_size
+    end = start + page_size
+    page_df = filtered_df.iloc[start:end]
+
+    if page_df.empty:
+        st.info("No results. Try clearing search or adjusting filters.")
+    else:
+        st.dataframe(page_df[display_cols].reset_index(drop=True), use_container_width=True)
+
+        sel_options = page_df[tag_col].dropna().astype(str).unique().tolist() if tag_col in page_df.columns else []
+        if sel_options:
+            sel_tag = st.selectbox("Select a tag to view details", options=sel_options, index=0)
+            detail_row = df[df[tag_col].astype(str) == str(sel_tag)]
+            if not detail_row.empty:
+                r = detail_row.iloc[0]
+                st.markdown("### Details")
+                st.write(f"**Tag:** {r.get(tag_col,'')}")
+                st.write(f"**Area:** {r.get(area_col,'')}")
+                st.write(f"**Category:** {r.get(category_col,'')}")
+                st.write(f"**Function:** {r.get(function_col,'')}")
+                st.write(f"**Last Serviced:** {r.get(serviced_col,'')}")
+                st.write(f"**Interval (days):** {r.get(interval_col,'')}")
+                st.write(f"**Status:** {r.get('Status','')}")
+                if st.session_state.role == "Supervisor":
+                    st.markdown("---")
+                    if st.button("Mark serviced today", key=f"mark_serviced_{sel_tag}"):
+                        idx = df[df[tag_col].astype(str) == str(sel_tag)].index
+                        if len(idx) > 0:
+                            df.loc[idx, serviced_col] = pd.to_datetime(datetime.today().date())
+                            new_row = {
+                                "Tag": sel_tag,
+                                "Serviced Date": pd.to_datetime(datetime.today().date()),
+                                "Interval (days)": int(df.loc[idx, interval_col].iloc[0]) if interval_col in df.columns else 30,
+                                "Service Type": "Routine",
+                                "Logged At": pd.Timestamp.utcnow(),
+                            }
+                            history_df = pd.concat([history_df, pd.DataFrame([new_row])], ignore_index=True)
+                            save_data(df, history_df, st.session_state.main_sheet_name)
+                            st.success(f"Marked {sel_tag} serviced today")
+                            st.experimental_rerun()
+
+# Pagination controls
+st.markdown("---")
+colp1, colp2, colp3 = st.columns([1, 1, 6])
+with colp1:
+    if st.button("Previous") and st.session_state.page_number > 0:
+        st.session_state.page_number -= 1
+with colp2:
+    if st.button("Next"):
+        max_page = max(0, (len(filtered_df) - 1) // page_size)
+        if st.session_state.page_number < max_page:
+            st.session_state.page_number += 1
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# --- Optional Supervisor quick update form (kept at bottom for convenience) ---
+if st.session_state.role == "Supervisor":
+    st.markdown("---")
+    st.subheader("Quick update: serviced date")
+    tags = df[tag_col].dropna().astype(str).unique().tolist() if tag_col else []
+    if tags:
+        upd_tag = st.selectbox("Select tag", tags)
+        upd_date = st.date_input("Serviced date", datetime.today().date())
+        upd_interval = st.number_input("Interval (days)", min_value=1, value=30, step=1)
+        if st.button("Save update"):
+            idx = df[df[tag_col].astype(str) == str(upd_tag)].index
+            if len(idx) > 0:
+                df.loc[idx, serviced_col] = pd.to_datetime(upd_date)
+                df.loc[idx, interval_col] = int(upd_interval)
+                new_row = {
+                    "Tag": upd_tag,
+                    "Serviced Date": pd.to_datetime(upd_date),
+                    "Interval (days)": int(upd_interval),
+                    "Service Type": "Routine",
+                    "Logged At": pd.Timestamp.utcnow(),
+                }
+                history_df = pd.concat([history_df, pd.DataFrame([new_row])], ignore_index=True)
+                save_data(df, history_df, st.session_state.main_sheet_name)
+                st.success(f"Updated {upd_tag}")
+                st.rerun()
+            else:
+                st.error("Tag not found in main sheet.")
+    else:
+        st.info("No tags available to update.")
