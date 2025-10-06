@@ -74,4 +74,130 @@ if "view_mode" not in st.session_state:
     st.session_state.view_mode = "home"
 if "main_sheet_name" not in st.session_state:
     st.session_state.main_sheet_name = None
-if "editing_tag" not
+if "editing_tag" not in st.session_state:
+    st.session_state.editing_tag = None
+
+# --- Demo credentials (replace in production) ---
+SALT = "change_this_salt_for_prod_!@#"
+USERS = {
+    "supervisor": {
+        "hash": hashlib.sha256((SALT + "supervisor123").encode()).hexdigest(),
+        "role": "Supervisor"
+    },
+    "technician": {
+        "hash": hashlib.sha256((SALT + "tech123").encode()).hexdigest(),
+        "role": "Technician"
+    }
+}
+
+# --- Data loading helpers ---
+@st.cache_data(show_spinner=False)
+def load_data():
+    df_main = pd.read_excel(FILE, sheet_name=None, engine="openpyxl")
+    main_sheet_name = list(df_main.keys())[0]
+    df = df_main[main_sheet_name].copy()
+    df.columns = df.columns.str.strip()
+    history = df_main.get(
+        HISTORY_SHEET,
+        pd.DataFrame(columns=["Tag", "Serviced Date", "Interval (days)", "Service Type", "Logged At"])
+    )
+    return df, history, main_sheet_name
+
+def save_data(df, history, main_sheet_name):
+    with pd.ExcelWriter(FILE, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+        df.to_excel(writer, index=False, sheet_name=main_sheet_name)
+        history.to_excel(writer, index=False, sheet_name=HISTORY_SHEET)
+
+df, history_df, main_sheet_name = load_data()
+st.session_state.main_sheet_name = main_sheet_name
+
+# --- Column detection helper ---
+def detect_column(df_in, options):
+    for col in df_in.columns:
+        if col.strip().lower() in [opt.lower() for opt in options]:
+            return col
+    return None
+
+area_col = detect_column(df, ["Area", "Location", "Department"])
+category_col = detect_column(df, ["Category", "Type", "Equipment Type"])
+tag_col = detect_column(df, ["Valve Tag number", "Tag", "Tag Number"])
+function_col = detect_column(df, ["Function", "Function Description"])
+serviced_col = detect_column(df, ["Serviced Date", "Last Serviced"])
+interval_col = detect_column(df, ["Interval (days)", "Service Interval", "Interval"])
+kit_col = detect_column(df, ["Service Kit Part Number", "Kit Number", "Part Number"])
+serial_col = detect_column(df, ["Serial Number", "SN"])
+
+required = [area_col, category_col, tag_col, function_col, serviced_col, interval_col]
+if any(x is None for x in required):
+    show_responsive_logo(main=True)
+    st.title("🛠️ Equipment Maintenance Tracker")
+    st.error("Missing required columns in the Excel. Check sheet headers and retry.")
+    st.stop()
+
+df[serviced_col] = pd.to_datetime(df[serviced_col], errors="coerce")
+
+def get_status(row):
+    if pd.isnull(row[serviced_col]) or pd.isnull(row[interval_col]):
+        return "⚪ Unknown"
+    try:
+        next_due = row[serviced_col] + timedelta(days=int(row[interval_col]))
+    except Exception:
+        return "⚪ Unknown"
+    today = datetime.today()
+    if today > next_due:
+        return "🔴 Overdue"
+    elif today > next_due - timedelta(days=7):
+        return "🟠 Due Soon"
+    else:
+        return "🟢 OK"
+
+df["Status"] = df.apply(get_status, axis=1)
+
+total_count = len(df)
+overdue_count = int(df["Status"].astype(str).str.contains("Overdue", na=False).sum())
+due_soon_count = int(df["Status"].astype(str).str.contains("Due Soon", na=False).sum())
+ok_count = int(df["Status"].astype(str).str.contains("OK", na=False).sum())
+overdue_plus_due_count = overdue_count + due_soon_count
+
+# --- Sidebar with login ---
+with st.sidebar:
+    show_responsive_logo(main=False)
+    st.markdown("---")
+    st.header("User")
+    if not st.session_state.auth:
+        username = st.text_input("Username", key="login_user")
+        password = st.text_input("Password", type="password", key="login_pw")
+        if st.button("Sign in"):
+            user = USERS.get(username.strip())
+            if user and hashlib.sha256((SALT + password).encode()).hexdigest() == user["hash"]:
+                st.session_state.auth = True
+                st.session_state.user = username.strip()
+                st.session_state.role = user["role"]
+                st.success(f"Signed in as {st.session_state.user} ({st.session_state.role})")
+                st.rerun()
+            else:
+                st.error("Invalid credentials")
+    else:
+        st.markdown(f"**{st.session_state.user}**")
+        st.markdown(f"Role: **{st.session_state.role}**")
+        if st.button("Sign out"):
+            st.session_state.auth = False
+            st.session_state.user = None
+            st.session_state.role = None
+            st.session_state.view_mode = "home"
+            st.session_state.view_tag = None
+            st.session_state.editing_tag = None
+            st.rerun()
+
+    st.markdown("---")
+    smart_options = [
+        f"All ({total_count})",
+        f"Overdue ({overdue_count})",
+        f"Due Soon ({due_soon_count})",
+        f"Overdue + Due Soon ({overdue_plus_due_count})",
+        f"OK ({ok_count})",
+    ]
+    default_index = 0
+    if "smart_filter_display" in st.session_state and st.session_state.smart_filter_display in smart_options:
+        default_index = smart_options.index(st.session_state.smart_filter_display)
+    st.selectbox("Show items", smart_options, index=default_index, key="smart_filter_display")
