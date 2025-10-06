@@ -76,8 +76,6 @@ if "main_sheet_name" not in st.session_state:
     st.session_state.main_sheet_name = None
 if "editing_tag" not in st.session_state:
     st.session_state.editing_tag = None
-if "smart_filter_display" not in st.session_state:
-    st.session_state.smart_filter_display = None
 
 # --- Demo credentials (replace in production) ---
 SALT = "change_this_salt_for_prod_!@#"
@@ -211,12 +209,12 @@ with st.sidebar:
         f"Overdue + Due Soon ({overdue_plus_due_count})",
         f"OK ({ok_count})",
     ]
-    default_index = 0
-    if st.session_state.smart_filter_display in smart_options:
-        default_index = smart_options.index(st.session_state.smart_filter_display)
-    st.session_state.smart_filter_display = st.selectbox(
-        "Show items", smart_options, index=default_index, key="smart_filter_display"
-    )
+    # Determine default index based on prior selection if present
+    prior = st.session_state.get("smart_filter_display")
+    default_index = smart_options.index(prior) if prior in smart_options else 0
+
+    # Use a widget key and DO NOT reassign to session_state manually
+    st.selectbox("Show items", smart_options, index=default_index, key="smart_filter_display")
 
     st.markdown("---")
     if st.session_state.auth and st.session_state.role == "Supervisor":
@@ -251,7 +249,7 @@ c3.metric("Due soon", due_soon_count)
 c4.metric("OK", ok_count)
 
 # Apply smart filter selection
-selection = st.session_state.smart_filter_display or smart_options[0]
+selection = st.session_state.get("smart_filter_display") or smart_options[0]
 filtered_df = df.copy()
 if "Overdue + Due Soon" in selection:
     filtered_df = df[df["Status"].isin(["🔴 Overdue", "🟠 Due Soon"])]
