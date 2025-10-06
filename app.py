@@ -167,7 +167,7 @@ due_soon_count = int(df["Status"].astype(str).str.contains("Due Soon", na=False)
 ok_count = int(df["Status"].astype(str).str.contains("OK", na=False).sum())
 overdue_plus_due_count = overdue_count + due_soon_count
 
-# --- Sidebar with login + filters ---
+# --- Sidebar with login + single smart-filter widget ---
 with st.sidebar:
     show_responsive_logo(main=False)
     st.markdown("---")
@@ -206,6 +206,7 @@ with st.sidebar:
             st.rerun()
 
     st.markdown("---")
+    # Single smart filter defined here (unique creation)
     smart_options = [
         f"All ({total_count})",
         f"Overdue ({overdue_count})",
@@ -238,7 +239,7 @@ if not st.session_state.auth:
     st.write("Please sign in from the sidebar to continue.")
     st.stop()
 
-# --- Professional Home page (complete) ---
+# --- Professional Home page (uses the single smart filter defined in sidebar) ---
 show_responsive_logo(main=True)
 st.markdown("<br>", unsafe_allow_html=True)
 st.header("Equipment Maintenance Dashboard")
@@ -253,7 +254,7 @@ k4.metric("OK", ok_count)
 st.markdown("---")
 
 # Search and quick filters row
-scol1, scol2, ecol = st.columns([3, 1.6, 1.2])
+scol1, scol2, scol3 = st.columns([3, 1.6, 1.2])
 
 with scol1:
     search_term = st.text_input(
@@ -263,25 +264,21 @@ with scol1:
     )
 
 with scol2:
-    smart_options = [
-        f"All ({total_count})",
-        f"Overdue ({overdue_count})",
-        f"Due Soon ({due_soon_count})",
-        f"Overdue + Due Soon ({overdue_plus_due_count})",
-        f"OK ({ok_count})",
-    ]
-    prior = st.session_state.get("smart_filter_display")
-    default_index = smart_options.index(prior) if prior in smart_options else 0
-    st.selectbox("Show items", smart_options, index=default_index, key="smart_filter_display")
+    # Read single smart filter value created in sidebar
+    home_smart_options = smart_options  # reuse same list
+    prior_home = st.session_state.get("smart_filter_display")
+    default_index_home = home_smart_options.index(prior_home) if prior_home in home_smart_options else 0
+    # Display the current selection as a non-editable element to avoid duplicate widget keys
+    st.write(f"Filter: **{home_smart_options[default_index_home]}**")
 
-with ecol:
+with scol3:
     today = datetime.today().date()
     dr_start = st.date_input("Serviced since", value=today - timedelta(days=30), key="dr_start")
     dr_end = st.date_input("Serviced until", value=today, key="dr_end")
 
 st.markdown("---")
 
-# Build filtered_df from smart filter first, then global search, then date-range
+# Build filtered_df from smart filter (sidebar), then search, then date-range
 selection = st.session_state.get("smart_filter_display") or smart_options[0]
 filtered_df = df.copy()
 
@@ -335,10 +332,8 @@ with left:
     st.subheader("Search results")
     display_cols = [tag_col, area_col, category_col, function_col, serviced_col, interval_col, "Status"]
     display_cols = [c for c in display_cols if c is not None]
-    page_size = st.selectbox("Rows per page", [10, 25, 50, 100], index=[10,25,50,100].index(st.session_state.get("page_size",25)))
+    page_size = st.selectbox("Rows per page", [10, 25, 50, 100], index=[10,25,50,100].index(st.session_state.get("page_size",25)), key="page_size_select")
     st.session_state.page_size = page_size
-    if "page_number" not in st.session_state:
-        st.session_state.page_number = 0
     start = st.session_state.page_number * page_size
     end = start + page_size
     page_df = filtered_df.iloc[start:end]
@@ -350,7 +345,7 @@ with left:
 
         sel_options = page_df[tag_col].dropna().astype(str).unique().tolist() if tag_col in page_df.columns else []
         if sel_options:
-            sel_tag = st.selectbox("Select a tag to view details", options=sel_options, index=0)
+            sel_tag = st.selectbox("Select a tag to view details", options=sel_options, index=0, key="sel_tag_box")
             detail_row = df[df[tag_col].astype(str) == str(sel_tag)]
             if not detail_row.empty:
                 r = detail_row.iloc[0]
@@ -384,10 +379,10 @@ with left:
 st.markdown("---")
 colp1, colp2, colp3 = st.columns([1, 1, 6])
 with colp1:
-    if st.button("Previous") and st.session_state.page_number > 0:
+    if st.button("Previous", key="page_prev") and st.session_state.page_number > 0:
         st.session_state.page_number -= 1
 with colp2:
-    if st.button("Next"):
+    if st.button("Next", key="page_next"):
         max_page = max(0, (len(filtered_df) - 1) // page_size)
         if st.session_state.page_number < max_page:
             st.session_state.page_number += 1
@@ -400,10 +395,10 @@ if st.session_state.role == "Supervisor":
     st.subheader("Quick update: serviced date")
     tags = df[tag_col].dropna().astype(str).unique().tolist() if tag_col else []
     if tags:
-        upd_tag = st.selectbox("Select tag", tags)
-        upd_date = st.date_input("Serviced date", datetime.today().date())
-        upd_interval = st.number_input("Interval (days)", min_value=1, value=30, step=1)
-        if st.button("Save update"):
+        upd_tag = st.selectbox("Select tag", tags, key="upd_tag_box")
+        upd_date = st.date_input("Serviced date", datetime.today().date(), key="upd_date")
+        upd_interval = st.number_input("Interval (days)", min_value=1, value=30, step=1, key="upd_interval")
+        if st.button("Save update", key="save_update"):
             idx = df[df[tag_col].astype(str) == str(upd_tag)].index
             if len(idx) > 0:
                 df.loc[idx, serviced_col] = pd.to_datetime(upd_date)
@@ -418,7 +413,7 @@ if st.session_state.role == "Supervisor":
                 history_df = pd.concat([history_df, pd.DataFrame([new_row])], ignore_index=True)
                 save_data(df, history_df, st.session_state.main_sheet_name)
                 st.success(f"Updated {upd_tag}")
-                st.rerun()
+                st.experimental_rerun()
             else:
                 st.error("Tag not found in main sheet.")
     else:
