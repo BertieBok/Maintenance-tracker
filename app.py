@@ -76,6 +76,8 @@ if "main_sheet_name" not in st.session_state:
     st.session_state.main_sheet_name = None
 if "editing_tag" not in st.session_state:
     st.session_state.editing_tag = None
+if "smart_filter_display" not in st.session_state:
+    st.session_state.smart_filter_display = None
 
 # --- Demo credentials (replace in production) ---
 SALT = "change_this_salt_for_prod_!@#"
@@ -135,6 +137,7 @@ if any(x is None for x in required):
     st.error("Missing required columns in the Excel. Check sheet headers and retry.")
     st.stop()
 
+# --- Compute status ---
 df[serviced_col] = pd.to_datetime(df[serviced_col], errors="coerce")
 
 def get_status(row):
@@ -160,7 +163,7 @@ due_soon_count = int(df["Status"].astype(str).str.contains("Due Soon", na=False)
 ok_count = int(df["Status"].astype(str).str.contains("OK", na=False).sum())
 overdue_plus_due_count = overdue_count + due_soon_count
 
-# --- Sidebar with login ---
+# --- Sidebar with login + filters ---
 with st.sidebar:
     show_responsive_logo(main=False)
     st.markdown("---")
@@ -177,7 +180,7 @@ with st.sidebar:
                 st.session_state.user = username.strip()
                 st.session_state.role = user["role"]
 
-                # ✅ Force a default view after login
+                # Force a default view after login
                 if st.session_state.role == "Supervisor":
                     st.session_state.view_mode = "main"
                 else:
@@ -205,4 +208,120 @@ with st.sidebar:
         f"All ({total_count})",
         f"Overdue ({overdue_count})",
         f"Due Soon ({due_soon_count})",
-        f"Overdue
+        f"Overdue + Due Soon ({overdue_plus_due_count})",
+        f"OK ({ok_count})",
+    ]
+    default_index = 0
+    if st.session_state.smart_filter_display in smart_options:
+        default_index = smart_options.index(st.session_state.smart_filter_display)
+    st.session_state.smart_filter_display = st.selectbox(
+        "Show items", smart_options, index=default_index, key="smart_filter_display"
+    )
+
+    st.markdown("---")
+    if st.session_state.auth and st.session_state.role == "Supervisor":
+        st.markdown("### Company logo")
+        uploaded_logo = st.file_uploader("Upload logo PNG or JPEG", type=["png", "jpg", "jpeg"], key="logo_uploader")
+        if uploaded_logo is not None:
+            st.session_state.logo_bytes = uploaded_logo.read()
+            st.success("Logo uploaded")
+
+    st.markdown("---")
+    st.markdown("Demo credentials")
+    st.write("Supervisor: supervisor / supervisor123")
+    st.write("Technician: technician / tech123")
+
+# --- Gatekeeper: show sign-in prompt if not authenticated ---
+if not st.session_state.auth:
+    st.markdown("<br>", unsafe_allow_html=True)
+    show_responsive_logo(main=True)
+    st.title("🛠️ Equipment Maintenance Tracker")
+    st.write("Please sign in from the sidebar to continue.")
+    st.stop()
+
+# --- Main content rendering (simple, non-blank) ---
+show_responsive_logo(main=True)
+st.title("Equipment overview")
+
+# Stats row
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Total", total_count)
+c2.metric("Overdue", overdue_count)
+c3.metric("Due soon", due_soon_count)
+c4.metric("OK", ok_count)
+
+# Apply smart filter selection
+selection = st.session_state.smart_filter_display or smart_options[0]
+filtered_df = df.copy()
+if "Overdue + Due Soon" in selection:
+    filtered_df = df[df["Status"].isin(["🔴 Overdue", "🟠 Due Soon"])]
+elif "Overdue" in selection and "Overdue + Due Soon" not in selection:
+    filtered_df = df[df["Status"] == "🔴 Overdue"]
+elif "Due Soon" in selection:
+    filtered_df = df[df["Status"] == "🟠 Due Soon"]
+elif "OK" in selection:
+    filtered_df = df[df["Status"] == "🟢 OK"]
+# else: "All" keeps full df
+
+# Search and view mode controls
+st.markdown("---")
+search = st.text_input("Search by tag, area, or function", "")
+if search.strip():
+    q = search.strip().lower()
+    filtered_df = filtered_df[
+        filtered_df.apply(
+            lambda r: any(
+                str(r.get(col, "")).lower().find(q) >= 0
+                for col in [tag_col, area_col, function_col, category_col]
+                if col is not None
+            ),
+            axis=1,
+        )
+    ]
+
+# Role-based note
+if st.session_state.role == "Technician":
+    st.info("You are in view-only mode.")
+else:
+    st.success("Supervisor mode: you can update records below.")
+
+# Show table (basic)
+st.dataframe(
+    filtered_df[
+        [col for col in [tag_col, area_col, category_col, function_col, serviced_col, interval_col, "Status"] if col is not None]
+    ],
+    use_container_width=True,
+)
+
+# Optional: simple update form for supervisors (update serviced date)
+if st.session_state.role == "Supervisor":
+    st.markdown("---")
+    st.subheader("Quick update: serviced date")
+    tags = filtered_df[tag_col].dropna().astype(str).unique().tolist() if tag_col else []
+    if tags:
+        upd_tag = st.selectbox("Select tag", tags)
+        upd_date = st.date_input("Serviced date", datetime.today().date())
+        upd_interval = st.number_input("Interval (days)", min_value=1, value=30, step=1)
+        if st.button("Save update"):
+            # Update main df
+            idx = df[df[tag_col].astype(str) == str(upd_tag)].index
+            if len(idx) > 0:
+                df.loc[idx, serviced_col] = pd.to_datetime(upd_date)
+                df.loc[idx, interval_col] = int(upd_interval)
+                # Append to history
+                new_row = {
+                    "Tag": upd_tag,
+                    "Serviced Date": pd.to_datetime(upd_date),
+                    "Interval (days)": int(upd_interval),
+                    "Service Type": "Routine",
+                    "Logged At": pd.Timestamp.utcnow(),
+                }
+                history_df = pd.concat([history_df, pd.DataFrame([new_row])], ignore_index=True)
+                # Persist
+                save_data(df, history_df, st.session_state.main_sheet_name)
+                st.success(f"Updated {upd_tag}")
+                st.rerun()
+            else:
+                st.error("Tag not found in main sheet.")
+    else:
+        st.info("No tags available to update.")
