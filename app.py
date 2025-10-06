@@ -204,4 +204,5 @@ with st.sidebar:
     smart_options = [
         f"All ({total_count})",
         f"Overdue ({overdue_count})",
-        f"Due Soon ({due_soon
+        f"Due Soon ({due_soon_count})",
+        f"Overdue
